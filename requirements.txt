@@ -1,4 +1,7 @@
 slack-bolt==1.27.0
+# Pinned: slack-bolt does not pin slack-sdk, and an unpinned rebuild picking up
+# a newer slack-sdk is what crashed the worker on 2026-09-04.
+slack-sdk==3.44.1
 aiohttp==3.13.4
 redis==7.3.0
 python-dotenv>=1.0.0

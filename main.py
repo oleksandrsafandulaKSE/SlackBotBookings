@@ -46,7 +46,15 @@ from slack_bolt.async_app import AsyncApp
 from slack_bolt.adapter.socket_mode.aiohttp import AsyncSocketModeHandler
 from home import register_home_handlers
 
-app = AsyncApp(token=tokens["bot-token"])
+# Socket Mode is an outbound WebSocket — the app exposes no HTTP endpoint, so
+# there are no inbound request signatures to verify and no signing secret is
+# needed. slack_sdk >= 3.4x raises "signing_secret must not be empty" when the
+# request-verification middleware is built with an empty secret, so the
+# middleware is disabled explicitly rather than relying on it tolerating one.
+app = AsyncApp(
+    token=tokens["bot-token"],
+    request_verification_enabled=False,
+)
 
 
 

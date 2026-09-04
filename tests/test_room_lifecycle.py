@@ -143,3 +143,42 @@ async def test_booking_fails_open_when_the_room_list_is_unverifiable():
 
     assert await is_room_gone(client, "sk-03", flow="test") is False
     assert await is_room_gone(client, "sk-03", flow="test", force=True) is False
+
+
+# ── Regression: Yarooms payloads do not always key the id as "id" ────────────
+
+SKYPE_03_ALT = {"spaceId": "sk-03", "name": "Skype-room 0.3"}
+SILENT_BOX_ALT = {"space_id": "sb-1", "name": "Silent Box 1"}
+
+
+@pytest.mark.asyncio
+async def test_live_room_keyed_as_spaceid_is_not_reported_gone():
+    client = make_client([[SKYPE_03_ALT, SILENT_BOX_ALT]])
+
+    assert await client.check_space_live("sk-03") == "live"
+    assert await client.check_space_live("sk-03", force=True) == "live"
+    assert await client.check_space_live("sb-1", force=True) == "live"
+
+
+@pytest.mark.asyncio
+async def test_booking_proceeds_for_a_live_room_keyed_as_spaceid():
+    client = make_client([[SKYPE_03_ALT]])
+
+    assert await is_room_gone(client, "sk-03", flow="test") is False
+    assert await is_room_gone(client, "sk-03", flow="test", force=True) is False
+
+
+@pytest.mark.asyncio
+async def test_an_empty_room_list_is_unknown_not_gone():
+    client = make_client([[]])
+
+    assert await client.check_space_live("sk-03", force=True) == "unknown"
+    assert await is_room_gone(client, "sk-03", flow="test", force=True) is False
+
+
+@pytest.mark.asyncio
+async def test_blank_room_id_is_never_judged_gone():
+    client = make_client([[SKYPE_03]])
+
+    assert await client.check_space_live("") == "unknown"
+    assert await is_room_gone(client, "", flow="test") is False

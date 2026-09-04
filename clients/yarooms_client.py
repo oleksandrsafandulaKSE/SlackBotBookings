@@ -106,6 +106,16 @@ class YaroomsClient:
     # ── spaces cache helpers ─────────────────────────────────────────────────
 
     @staticmethod
+    def _space_id(space: dict) -> str:
+        """Space id as a string. Yarooms payloads use ``id``, ``spaceId`` or ``space_id``."""
+        return str(
+            space.get("id")
+            or space.get("spaceId")
+            or space.get("space_id")
+            or ""
+        )
+
+    @staticmethod
     def _space_name(space: dict) -> str:
         return str(
             space.get("name")
@@ -348,7 +358,10 @@ class YaroomsClient:
         import logging
         logger = logging.getLogger(__name__)
 
-        wanted = str(space_id)
+        wanted = str(space_id or "").strip()
+        if not wanted:
+            return "unknown"
+
         if not force:
             try:
                 cached = await self.get_spaces_cached()
@@ -359,7 +372,7 @@ class YaroomsClient:
                 )
                 return "unknown"
 
-            if any(str(s.get("id")) == wanted for s in cached):
+            if any(self._space_id(s) == wanted for s in cached):
                 return "live"
 
         # Confirm against a live list before declaring the room gone.
@@ -372,8 +385,15 @@ class YaroomsClient:
             )
             return "unknown"
 
-        if any(str(s.get("id")) == wanted for s in fresh):
+        if any(self._space_id(s) == wanted for s in fresh):
             return "live"
+
+        if not fresh:
+            # An empty room list is not evidence that this one room was removed.
+            logger.warning(
+                f"Yarooms check_space_live: empty room list, failing open: room={wanted}"
+            )
+            return "unknown"
 
         logger.info(f"Yarooms check_space_live: room no longer exists, room={wanted}")
         await self.invalidate_spaces_cache()

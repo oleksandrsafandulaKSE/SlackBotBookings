@@ -22,6 +22,7 @@ Required scope: users:read.email (Slack) — needed to resolve user e-mail for b
 import aiohttp
 import asyncio
 import json
+import os
 import time
 from datetime import datetime, timedelta
 from utils.booking_utils import _covers_interval, _to_hhmm, _to_minutes
@@ -47,6 +48,21 @@ TARGET_SPACE_KEYWORDS = (
     "silent-box",
     "silentbox",
 )
+
+# Rooms to keep out of every booking flow even though Yarooms still returns them
+# (decommissioned in the building but not yet removed from Yarooms). Read from
+# the environment so rooms can be added or removed via a Heroku Config Var
+# without a code change or redeploy. Comma- or space-separated space ids.
+EXCLUDED_SPACE_IDS_ENV = "YAROOMS_EXCLUDED_SPACE_IDS"
+
+
+def _parse_excluded_space_ids(raw: str | None) -> frozenset[str]:
+    """Parse a comma/space-separated id list into a set of strings."""
+    if not raw:
+        return frozenset()
+    return frozenset(
+        part.strip() for part in raw.replace(",", " ").split() if part.strip()
+    )
 
 
 class YaroomsClient:
@@ -77,6 +93,11 @@ class YaroomsClient:
         self._spaces_cache_last_attempt_at: float | None = None
         self._spaces_cache_last_error: str | None = None
         self._spaces_cache_lock = asyncio.Lock()
+
+        # Explicitly excluded rooms (see EXCLUDED_SPACE_IDS_ENV)
+        self.excluded_space_ids = _parse_excluded_space_ids(
+            os.environ.get(EXCLUDED_SPACE_IDS_ENV)
+        )
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Lazy-initialize and return the persistent HTTP session."""
@@ -278,10 +299,11 @@ class YaroomsClient:
         return []
 
     def _filter_target_spaces(self, spaces: list[dict]) -> list[dict]:
-        """Keep only Skype rooms and Silent Boxes."""
+        """Keep only Skype rooms and Silent Boxes, minus explicitly excluded ids."""
         return [
             s for s in spaces
             if any(kw in self._space_name(s).strip().lower() for kw in TARGET_SPACE_KEYWORDS)
+            and self._space_id(s) not in self.excluded_space_ids
         ]
 
     # ── Redis cache primitives ───────────────────────────────────────────────
@@ -629,8 +651,17 @@ class YaroomsClient:
         
         logger.info(
             f"Yarooms get_spaces: raw_count={raw_count}, filtered_count={filtered_count}, "
-            f"filtering_keywords={TARGET_SPACE_KEYWORDS}"
+            f"filtering_keywords={TARGET_SPACE_KEYWORDS}, "
+            f"excluded_space_ids={sorted(self.excluded_space_ids) or 'none'}"
         )
+
+        if self.excluded_space_ids:
+            excluded_now = [
+                f"{self._space_name(s)} ({self._space_id(s)})" for s in spaces
+                if self._space_id(s) in self.excluded_space_ids
+            ]
+            if excluded_now:
+                logger.info(f"Yarooms get_spaces: excluded_rooms={excluded_now}")
         
         # Log which rooms were filtered out (for debugging)
         if raw_count > filtered_count:

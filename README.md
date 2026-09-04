@@ -18,7 +18,8 @@ Slack Socket Mode bot for booking Skype rooms and Silent Boxes through Yarooms.
 - **Quota rollback on cancel.** After successful cancellation, the same number of minutes is returned to the user's daily quota.
 - **No past bookings.** Slots whose start time has already passed are rejected or filtered out automatically.
 - Only **Skype rooms** and **Silent Boxes** are shown (other Yarooms space types are ignored).
-- Rooms removed from Yarooms (e.g. the retired Skype-room 0.1 / 0.2) drop out automatically — no room names are hardcoded. If a stale modal is used to book one, the bot says the room no longer exists and refreshes its room list.
+- Rooms that Yarooms still lists but that are out of service (the `[0.1]` / `[0.2]` Shelter Skype Rooms) are excluded via the `YAROOMS_EXCLUDED_SPACE_IDS` config var — add or remove ids there, no redeploy needed.
+- Rooms actually removed from Yarooms drop out automatically — no room names are hardcoded. If a stale modal is used to book one, the bot says the room no longer exists and refreshes its room list.
 
 ---
 

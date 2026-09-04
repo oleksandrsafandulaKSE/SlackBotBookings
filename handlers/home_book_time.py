@@ -404,6 +404,13 @@ def register_book_time_handlers(app, yarooms, quota):
                     )
                     return
 
+            if await common.is_room_gone(yarooms, room_id, flow="book_time"):
+                await _safe_modal_update(
+                    common.room_gone_modal(),
+                    stage="room_gone",
+                )
+                return
+
             try:
                 booking_result = await yarooms.create_booking(
                     space_id=room_id,
@@ -417,6 +424,12 @@ def register_book_time_handlers(app, yarooms, quota):
                     f"Book by Time create_booking failed: room={room_id}, date={booking_date}, "
                     f"start={start_time}, end={end_time}, err={type(book_err).__name__}: {book_err}"
                 )
+                if await common.is_room_gone(yarooms, room_id, flow="book_time", force=True):
+                    await _safe_modal_update(
+                        common.room_gone_modal(),
+                        stage="room_gone",
+                    )
+                    return
                 error_detail = str(book_err)[:120]
                 await _safe_modal_update(
                     common.error_modal_with_context(

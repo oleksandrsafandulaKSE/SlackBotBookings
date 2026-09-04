@@ -26,6 +26,7 @@ from utils.slack_notifications import notify_booking_in_chat
 from utils.slack_views import (
     error_modal_with_context,
     quota_exceeded_modal,
+    room_gone_modal,
     simple_modal,
     skeleton_view,
 )
@@ -49,10 +50,12 @@ __all__ = [
     "get_local_now",
     "notify_booking_in_chat",
     "quota_exceeded_modal",
+    "room_gone_modal",
     "simple_modal",
     "skeleton_view",
     "get_user_email",
     "safe_get_room_name",
+    "is_room_gone",
 ]
 
 
@@ -98,3 +101,27 @@ async def safe_get_room_name(yarooms, room_id: str) -> str:
         )
     except Exception:
         return room_id
+
+
+async def is_room_gone(yarooms, room_id: str, *, flow: str = "", force: bool = False) -> bool:
+    """True only when Yarooms confirms the room no longer exists.
+
+    ``force=True`` bypasses the spaces cache — use it after a booking failure to
+    tell "this room was decommissioned" apart from any other Yarooms error.
+
+    Fails open: an unverifiable room list (Yarooms/network error) returns False so
+    a Yarooms outage never turns every booking into "room does not exist".
+    """
+    try:
+        status = await yarooms.check_space_live(room_id, force=force)
+    except Exception as exc:
+        _logger.warning(
+            "Room existence check failed, proceeding: flow=%s, room=%s, err=%s: %s",
+            flow, room_id, type(exc).__name__, exc,
+        )
+        return False
+
+    if status == "gone":
+        _logger.info("Booking refused, room no longer exists: flow=%s, room=%s", flow, room_id)
+        return True
+    return False

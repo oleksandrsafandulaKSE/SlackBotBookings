@@ -111,14 +111,32 @@ def register_hot_booking_handlers(app, yarooms, quota):
                 )
                 return
 
-            booking_result = await yarooms.create_booking(
-                space_id=space["id"],
-                date=today,
-                start_time=start_time,
-                end_time=end_time,
-                user_email=user_email,
-                title="Швидке бронювання через Slack",
-            )
+            if await common.is_room_gone(yarooms, space["id"], flow="hot_booking"):
+                await client.views_update(
+                    view_id=new_view_id,
+                    view=common.room_gone_modal(space.get("name", "")),
+                )
+                return
+
+            try:
+                booking_result = await yarooms.create_booking(
+                    space_id=space["id"],
+                    date=today,
+                    start_time=start_time,
+                    end_time=end_time,
+                    user_email=user_email,
+                    title="Швидке бронювання через Slack",
+                )
+            except Exception as book_err:
+                if await common.is_room_gone(
+                    yarooms, space["id"], flow="hot_booking", force=True
+                ):
+                    await client.views_update(
+                        view_id=new_view_id,
+                        view=common.room_gone_modal(space.get("name", "")),
+                    )
+                    return
+                raise book_err
 
             # ── Record quota ONLY after successful booking ────────────────
             if user_email:

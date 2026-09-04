@@ -60,6 +60,12 @@ Both `YAROOMS_EMAIL` **and** `YAROOMS_PASSWORD` must be present when no API key 
 - All 4 booking handlers call real `YaroomsClient` methods; no stubs remain.
 - Room list in `open_book_room_modal` uses cached Yarooms spaces (`get_spaces_cached` with TTL/stale fallback); on API/cache miss it shows an explicit error modal (no static template rooms).
 - `YaroomsClient.get_spaces` filters rooms to **Skype rooms** and **Silent Boxes** only; other room types are ignored and never cached.
+- **Decommissioned rooms** (rooms removed from Yarooms, e.g. former Skype-room 0.1 / 0.2) are handled by lifecycle checks, never by a hardcoded deny-list:
+  - `YaroomsClient.check_space_live(space_id, force=False)` returns `"live"` / `"gone"` / `"unknown"`. `force=False` trusts a cached hit (no round-trip on the happy path); `force=True` bypasses the cache. `"unknown"` (Yarooms unreachable) must be treated as live — callers **fail open**.
+  - Confirming a room gone calls `invalidate_spaces_cache()` so the dead room stops being served from the fresh/stale keys to other users.
+  - `handlers.home_common.is_room_gone(yarooms, room_id, flow=, force=)` is the single decision point used by all booking flows; it returns `True` only on a confirmed `"gone"`.
+  - Checked **before** `create_booking` (all flows) and before rendering a room's day schedule; re-checked with `force=True` **after** a `create_booking` failure, which catches a room that vanished upstream but is still inside the 5-min cache window.
+  - On a confirmed gone room the user sees `room_gone_modal` (utils/slack_views.py) instead of a generic failure with a raw API error string. Quota is untouched (still incremented only after `create_booking` succeeds).
 - Cache backend: **Redis** (primary, `yarooms:spaces` / `yarooms:spaces:stale` keys) with automatic **in-memory fallback** when Redis is unavailable. Injected via `yarooms.set_redis_client(redis)` in `home.py`.
 - Spaces cache is **warmed at bot startup** via `get_spaces_cached(force_refresh=True)` so the first user gets an instant room list.
 - `skeleton_view("Searching")` is used as loading state; type is `"modal"` (was incorrectly `"home"` before).
@@ -145,3 +151,9 @@ The `Procfile` declares a `worker` process (`worker: python main.py`). No web dy
 - Slack Bolt async stack: `slack_bolt.async_app.AsyncApp` + `slack_bolt.adapter.socket_mode.aiohttp.AsyncSocketModeHandler`.
 - Yarooms API client: `clients/yarooms_client.py` (`YaroomsClient`, aiohttp-based). Verify endpoint paths and response envelope shapes from https://api-docs.yarooms.com/#introduction before going live.
 - `.env` contains live tokens — already in `.gitignore`; never log or copy values.
+
+## Tests
+- `pytest` + `pytest-asyncio` (see `requirements-dev.txt`, config in `pytest.ini`, `asyncio_mode = auto`). Run with `python -m pytest`.
+- Single seam: the `YaroomsClient` public surface with `_request` stubbed — no Redis or network needed (in-memory cache path). A decommissioned room is expressed as a change in the stubbed `/api/spaces` response between calls.
+- `tests/test_room_lifecycle.py` covers the room-type filter, live/gone/unknown detection, cache invalidation on detection, the cached-window case, and fail-open behaviour.
+- Tests assert observable behaviour only (room list contents, gone/live verdicts, whether a booking is refused) — never cache internals or log text.

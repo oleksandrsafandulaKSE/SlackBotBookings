@@ -328,6 +328,57 @@ class YaroomsClient:
         self._spaces_cache_present = False
         await self._redis_delete_spaces()
 
+    async def check_space_live(self, space_id: str, *, force: bool = False) -> str:
+        """Report whether ``space_id`` still exists in Yarooms.
+
+        Returns ``"live"``, ``"gone"`` or ``"unknown"``. ``"unknown"`` means the
+        room list could not be verified against Yarooms (API/network failure) and
+        callers must fail open — never treat it as ``"gone"``.
+
+        With ``force=False`` (pre-flight use) a cached hit answers ``"live"``
+        immediately, so the happy path costs no round-trip; only a cached miss is
+        confirmed against a live list. With ``force=True`` the cache is bypassed
+        entirely — used after a booking failure, where one round-trip buys an
+        accurate diagnosis and catches a room that is gone upstream but still
+        inside the fresh cache window.
+
+        Whenever the room is confirmed gone, both cache keys are dropped so the
+        dead room stops being offered to everyone else.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        wanted = str(space_id)
+        if not force:
+            try:
+                cached = await self.get_spaces_cached()
+            except Exception as exc:
+                logger.warning(
+                    f"Yarooms check_space_live: cached lookup failed, failing open: "
+                    f"room={wanted}, err={type(exc).__name__}: {exc}"
+                )
+                return "unknown"
+
+            if any(str(s.get("id")) == wanted for s in cached):
+                return "live"
+
+        # Confirm against a live list before declaring the room gone.
+        try:
+            fresh = await self.get_spaces_cached(force_refresh=True, allow_stale_on_error=False)
+        except Exception as exc:
+            logger.warning(
+                f"Yarooms check_space_live: refresh failed, failing open: "
+                f"room={wanted}, err={type(exc).__name__}: {exc}"
+            )
+            return "unknown"
+
+        if any(str(s.get("id")) == wanted for s in fresh):
+            return "live"
+
+        logger.info(f"Yarooms check_space_live: room no longer exists, room={wanted}")
+        await self.invalidate_spaces_cache()
+        return "gone"
+
     def get_spaces_cache_meta(self) -> dict:
         """Return debug metadata for spaces cache state."""
         now = time.time()

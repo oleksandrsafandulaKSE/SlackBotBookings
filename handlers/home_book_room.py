@@ -125,6 +125,14 @@ def register_book_room_handlers(app, yarooms, quota):
             room_name = selected_option["text"]["text"]
             selected_date = state_values["block_room_date"]["action_room_date"]["selected_date"]
 
+            # ── Room may have been decommissioned since the picker rendered ──
+            if await common.is_room_gone(yarooms, room_id, flow="book_room_schedule"):
+                await client.views_update(
+                    view_id=body["view"]["id"],
+                    view=common.room_gone_modal(room_name),
+                )
+                return
+
             # Walk the full working day to discover every free window
             free_windows = await yarooms.get_space_day_schedule(
                 room_id, selected_date,
@@ -345,6 +353,13 @@ def register_book_room_handlers(app, yarooms, quota):
                 return
 
             # ── Create booking ───────────────────────────────────────────
+            if await common.is_room_gone(yarooms, room_id, flow="book_room"):
+                await client.views_update(
+                    view_id=body["view"]["id"],
+                    view=common.room_gone_modal(),
+                )
+                return
+
             try:
                 booking_result = await yarooms.create_booking(
                     space_id=room_id,
@@ -358,6 +373,12 @@ def register_book_room_handlers(app, yarooms, quota):
                     f"Book by Room create_booking failed: room={room_id}, date={booking_date}, "
                     f"start={start_time}, end={end_time}, err={type(book_err).__name__}: {book_err}"
                 )
+                if await common.is_room_gone(yarooms, room_id, flow="book_room", force=True):
+                    await client.views_update(
+                        view_id=body["view"]["id"],
+                        view=common.room_gone_modal(),
+                    )
+                    return
                 await client.views_update(
                     view_id=body["view"]["id"],
                     view=common.error_modal_with_context(
@@ -520,6 +541,13 @@ def register_book_room_handlers(app, yarooms, quota):
                     )
                     return
 
+            if await common.is_room_gone(yarooms, room_id, flow="book_room"):
+                await client.views_update(
+                    view_id=body["view"]["id"],
+                    view=common.room_gone_modal(),
+                )
+                return
+
             try:
                 booking_result = await yarooms.create_booking(
                     space_id=room_id,
@@ -533,6 +561,12 @@ def register_book_room_handlers(app, yarooms, quota):
                     f"Book by Room create_booking failed: room={room_id}, date={booking_date}, "
                     f"start={start_time}, end={end_time}, err={type(book_err).__name__}: {book_err}"
                 )
+                if await common.is_room_gone(yarooms, room_id, flow="book_room", force=True):
+                    await client.views_update(
+                        view_id=body["view"]["id"],
+                        view=common.room_gone_modal(),
+                    )
+                    return
                 error_detail = str(book_err)[:120]
                 await client.views_update(
                     view_id=body["view"]["id"],

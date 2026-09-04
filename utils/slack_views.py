@@ -67,3 +67,13 @@ def quota_exceeded_modal(used: int, remaining: int, requested: int, max_daily: i
     )
 
 
+def room_gone_modal(room_label: str = "") -> dict:
+    """Modal shown when the selected room no longer exists in Yarooms."""
+    suffix = f" *{room_label}*" if room_label else ""
+    return simple_modal(
+        "Кімнати більше немає",
+        (
+            f"🚫 Кімната{suffix} більше не існує — її прибрали з Yarooms.\n\n"
+            f"Оберіть іншу кімнату зі списку."
+        ),
+    )

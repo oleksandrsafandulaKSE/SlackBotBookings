@@ -54,6 +54,10 @@ TARGET_SPACE_KEYWORDS = (
 # the environment so rooms can be added or removed via a Heroku Config Var
 # without a code change or redeploy. Comma- or space-separated space ids.
 EXCLUDED_SPACE_IDS_ENV = "YAROOMS_EXCLUDED_SPACE_IDS"
+# A stale token has been seen to make Yarooms answer HTTP 500 instead of 401,
+# so a 5xx also triggers a re-auth — but at most once per this many seconds,
+# so a genuine Yarooms outage does not hammer /api/auth.
+TOKEN_REFRESH_ON_5XX_COOLDOWN_SECONDS = 60
 
 
 def _parse_excluded_space_ids(raw: str | None) -> frozenset[str]:
@@ -75,6 +79,7 @@ class YaroomsClient:
         self._auth_password: str = ""
         self._auth_subdomain: str = ""
         self._auth_refresh_lock = asyncio.Lock()
+        self._token_refreshed_at: float | None = None
 
         # Persistent HTTP session for connection pooling (lazy-initialized)
         self._session: aiohttp.ClientSession | None = None
@@ -100,11 +105,15 @@ class YaroomsClient:
         )
 
     async def _get_session(self) -> aiohttp.ClientSession:
-        """Lazy-initialize and return the persistent HTTP session."""
-        if self._session is None:
+        """Lazy-initialize and return the persistent HTTP session.
+
+        Auth headers are sent per request (see ``_request``), so a refreshed
+        token takes effect without rebuilding the session.
+        """
+        if self._session is None or self._session.closed:
             async with self._session_lock:
-                if self._session is None:
-                    self._session = aiohttp.ClientSession(headers=self._headers)
+                if self._session is None or self._session.closed:
+                    self._session = aiohttp.ClientSession()
         return self._session
 
     async def close(self) -> None:
@@ -570,8 +579,12 @@ class YaroomsClient:
         client._auth_subdomain = subdomain
         return client
 
-    async def _refresh_api_token(self) -> None:
-        """Re-authenticate and update api_key (credentials mode only)."""
+    async def _refresh_api_token(self, stale_token: str | None = None) -> None:
+        """Re-authenticate and update api_key (credentials mode only).
+
+        When *stale_token* is given and another request has already replaced
+        it, the refresh is skipped — parallel failures re-auth only once.
+        """
         if not (self._auth_email and self._auth_password):
             raise RuntimeError("Cannot refresh Yarooms token without stored credentials.")
         auth_url = f"{self.base_url}/api/auth"
@@ -580,6 +593,8 @@ class YaroomsClient:
             params["subdomain"] = self._auth_subdomain
 
         async with self._auth_refresh_lock:
+            if stale_token is not None and self.api_key != stale_token:
+                return
             async with aiohttp.ClientSession() as session:
                 async with session.post(auth_url, params=params) as resp:
                     if resp.status != 200:
@@ -592,6 +607,7 @@ class YaroomsClient:
             if not token:
                 raise RuntimeError("Yarooms re-auth response contained no token.")
             self.api_key = token
+            self._token_refreshed_at = time.time()
 
     # ── low-level helpers ────────────────────────────────────────────────────
 
@@ -603,28 +619,39 @@ class YaroomsClient:
         }
 
     async def _request(self, method: str, path: str, **kwargs) -> dict | list:
-        """Send an authenticated request, auto-refreshing token on 401."""
+        """Send an authenticated request, re-authenticating once on 401/5xx.
+
+        Errors never close the shared session: parallel requests are still
+        using it, and closing it fails them all with "Connector is closed".
+        """
         can_refresh = bool(self._auth_email and self._auth_password)
         for attempt in range(2):
             session = await self._get_session()
+            token = self.api_key
             try:
                 async with session.request(
-                    method, f"{self.base_url}{path}", **kwargs
+                    method, f"{self.base_url}{path}", headers=self._headers, **kwargs
                 ) as resp:
-                    if resp.status == 401 and can_refresh and attempt == 0:
-                        await self._refresh_api_token()
+                    if attempt == 0 and can_refresh and self._should_refresh_token(resp.status):
+                        await self._refresh_api_token(stale_token=token)
                         continue
                     resp.raise_for_status()
                     return await resp.json()
-            except aiohttp.ClientError:
-                # Connection pool error — close session and retry once
-                if self._session is not None:
-                    await self._session.close()
-                    self._session = None
+            except aiohttp.ClientConnectionError:
+                # Transient network failure — aiohttp drops the broken
+                # connection itself, so just retry once.
                 if attempt == 0:
                     continue
                 raise
         raise RuntimeError("Yarooms request failed after auth refresh retry.")
+
+    def _should_refresh_token(self, status: int) -> bool:
+        if status == 401:
+            return True
+        if status < 500:
+            return False
+        last = self._token_refreshed_at
+        return last is None or time.time() - last >= TOKEN_REFRESH_ON_5XX_COOLDOWN_SECONDS
 
     # ── spaces / rooms ───────────────────────────────────────────────────────
 
